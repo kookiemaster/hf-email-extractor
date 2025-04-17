@@ -20,13 +20,13 @@ A tool to extract contributor emails from Hugging Face repositories by first get
 
 The application consists of two main components:
 
-1. **Backend (FastAPI)**
+1. **Server (FastAPI)**
    - RESTful API for repository processing
    - Background task processing for email extraction
    - Database integration for storing results
    - Comprehensive error handling and validation
 
-2. **Frontend (React + Vite)**
+2. **Web (React + Vite)**
    - Modern UI with Tailwind CSS and shadcn UI components
    - Real-time status updates with polling
    - Responsive design for all device sizes
@@ -39,24 +39,27 @@ The application consists of two main components:
 - Node.js 20+
 - PostgreSQL database
 
-### Backend Setup
+### Server Setup
 
 1. Clone the repository
 2. Install Python dependencies:
    ```
+   cd server
    pip install requests beautifulsoup4 fastapi uvicorn psycopg2-binary anthropic openai pdf2image pytesseract PyPDF2
    ```
-3. Configure environment variables in `config.py`
-4. Start the backend server:
+3. Configure environment variables in `server/config.py`
+4. Start the server:
    ```
+   cd server
    uvicorn backend:app --host 0.0.0.0 --port 8000
    ```
 
-### Frontend Setup
+### Web Setup
 
-1. Navigate to the frontend directory
+1. Navigate to the web directory
 2. Install Node.js dependencies:
    ```
+   cd web
    npm install
    ```
 3. Start the development server:
