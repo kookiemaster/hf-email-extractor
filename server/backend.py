@@ -14,11 +14,11 @@ from typing import List, Optional
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from huggingface_scraper import HuggingFaceScraper
-from git_log_parser import GitLogParser
-from email_searcher import EmailSearcher
-from validation import validate_repository_path, ValidationError, handle_api_error
-from config import DB_CONNECTION_STRING, DB_TABLE_PREFIX
+from server.huggingface_scraper import HuggingFaceScraper
+from server.git_log_parser import GitLogParser
+from server.email_searcher import EmailSearcher
+from server.validation import validate_repository_path, ValidationError, handle_api_error
+from server.config import DB_CONNECTION_STRING, DB_TABLE_PREFIX
 
 # Initialize FastAPI app
 app = FastAPI(title="Hugging Face Contributor Email Extractor")

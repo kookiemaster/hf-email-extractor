@@ -1,20 +1,18 @@
 """
-Email search functionality to find contributor email addresses
+Alternative email search functionality that doesn't rely on browser automation
 """
 import re
 import requests
 from bs4 import BeautifulSoup
 import time
 import random
-from server.browser_integration import BrowserUse
-from server.config import ANTHROPIC_API_KEY, OPENAI_API_KEY
-import PyPDF2
 import os
 import json
+import PyPDF2
+from urllib.parse import quote_plus
 
-class EmailSearcher:
+class AlternativeEmailSearcher:
     def __init__(self):
-        self.browser = BrowserUse()
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
@@ -27,7 +25,7 @@ class EmailSearcher:
     
     def search_for_email(self, name, affiliation=None):
         """
-        Search for email address of a contributor
+        Search for email address of a contributor using direct HTTP requests
         
         Args:
             name (str): Contributor name
@@ -45,10 +43,13 @@ class EmailSearcher:
         }
         
         # Try different search strategies
-        self._search_google_scholar(name, affiliation, results)
+        self._search_dblp(name, results)
         
         if not results["potential_emails"]:
-            self._search_general_web(name, affiliation, results)
+            self._search_arxiv(name, results)
+        
+        if not results["potential_emails"] and affiliation:
+            self._search_university_directory(name, affiliation, results)
         
         # Determine most likely email
         if results["potential_emails"]:
@@ -74,109 +75,123 @@ class EmailSearcher:
         
         return results
     
-    def _search_google_scholar(self, name, affiliation, results):
+    def _search_dblp(self, name, results):
         """
-        Search for email on Google Scholar
+        Search for email on DBLP (computer science bibliography)
         
         Args:
             name (str): Contributor name
-            affiliation (str): Contributor affiliation
             results (dict): Results dictionary to update
         """
         try:
             # Format search query
-            query = f"{name}"
-            if affiliation:
-                query += f" {affiliation}"
+            query = quote_plus(name)
+            url = f"https://dblp.org/search?q={query}"
             
-            # Start browser session
-            self.browser.start_session()
-            
-            # Navigate to Google Scholar
-            self.browser.navigate("https://scholar.google.com/")
-            time.sleep(2)
-            
-            # Get page content
-            content = self.browser.get_page_content()
-            
-            # Find search input and submit search
-            search_input_selector = "input[name='q']"
-            self.browser.type(search_input_selector, query)
-            time.sleep(1)
-            
-            # Press Enter to search
-            search_button_selector = "button[type='submit']"
-            self.browser.click(search_button_selector)
-            time.sleep(3)
-            
-            # Get search results
-            content = self.browser.get_page_content()
-            
-            if content:
-                # Parse content
-                soup = BeautifulSoup(content.get("html", ""), "html.parser")
+            response = requests.get(url, headers=self.headers)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, "html.parser")
                 
-                # Find paper links
-                paper_links = []
+                # Find author links
+                author_links = []
                 for a_tag in soup.find_all("a", href=True):
                     href = a_tag.get("href", "")
-                    # Look for PDF links or paper links
-                    if ".pdf" in href or "scholar.google.com/citations" in href:
-                        paper_links.append(href)
-                    elif "/scholar?cluster=" in href:
-                        paper_links.append(f"https://scholar.google.com{href}")
+                    if "/pid/" in href and "dblp.org" in href:
+                        author_links.append(href)
                 
-                # Process up to 3 paper links
-                for i, link in enumerate(paper_links[:3]):
-                    if ".pdf" in link:
-                        # Download and process PDF
-                        pdf_path = os.path.join(self.pdf_dir, f"{name.replace(' ', '_')}_{i}.pdf")
-                        self.browser.download_pdf(link, pdf_path)
-                        self._extract_emails_from_pdf(pdf_path, results)
-                    else:
-                        # Visit paper page
-                        self.browser.navigate(link)
-                        time.sleep(3)
+                # Visit author page
+                if author_links:
+                    author_url = author_links[0]
+                    author_response = requests.get(author_url, headers=self.headers)
+                    
+                    if author_response.status_code == 200:
+                        author_soup = BeautifulSoup(author_response.text, "html.parser")
                         
-                        # Get page content
-                        paper_content = self.browser.get_page_content()
-                        if paper_content:
-                            # Look for PDF links
-                            soup = BeautifulSoup(paper_content.get("html", ""), "html.parser")
-                            pdf_links = []
-                            
-                            for a_tag in soup.find_all("a", href=True):
-                                href = a_tag.get("href", "")
-                                if ".pdf" in href:
-                                    pdf_links.append(href)
-                            
-                            # Download and process first PDF
-                            if pdf_links:
-                                pdf_url = pdf_links[0]
-                                if not pdf_url.startswith("http"):
-                                    if pdf_url.startswith("/"):
-                                        pdf_url = f"https://scholar.google.com{pdf_url}"
-                                    else:
-                                        pdf_url = f"https://scholar.google.com/{pdf_url}"
-                                
-                                pdf_path = os.path.join(self.pdf_dir, f"{name.replace(' ', '_')}_{i}.pdf")
-                                self.browser.download_pdf(pdf_url, pdf_path)
-                                self._extract_emails_from_pdf(pdf_path, results)
-            
-            # Close browser session
-            self.browser.close_session()
+                        # Look for paper links
+                        paper_links = []
+                        for a_tag in author_soup.find_all("a", href=True):
+                            href = a_tag.get("href", "")
+                            if ".pdf" in href or "doi.org" in href or "arxiv.org" in href:
+                                paper_links.append(href)
+                        
+                        # Process up to 3 paper links
+                        for i, link in enumerate(paper_links[:3]):
+                            try:
+                                if ".pdf" in link:
+                                    # Download and process PDF
+                                    pdf_path = os.path.join(self.pdf_dir, f"{name.replace(' ', '_')}_{i}.pdf")
+                                    self._download_pdf(link, pdf_path)
+                                    self._extract_emails_from_pdf(pdf_path, results)
+                                else:
+                                    # Visit paper page
+                                    paper_response = requests.get(link, headers=self.headers)
+                                    
+                                    if paper_response.status_code == 200:
+                                        paper_soup = BeautifulSoup(paper_response.text, "html.parser")
+                                        
+                                        # Extract text and look for email patterns
+                                        text = paper_soup.get_text()
+                                        emails = re.findall(self.email_pattern, text)
+                                        
+                                        for email in emails:
+                                            if email not in results["potential_emails"] and self._is_valid_email(email):
+                                                results["potential_emails"].append(email)
+                                                results["sources"].append({
+                                                    "email": email,
+                                                    "source": "DBLP Paper Page",
+                                                    "url": link
+                                                })
+                            except Exception as e:
+                                print(f"Error processing paper link {link}: {e}")
         
         except Exception as e:
-            print(f"Error searching Google Scholar: {e}")
-            # Ensure browser session is closed
-            try:
-                self.browser.close_session()
-            except:
-                pass
+            print(f"Error searching DBLP: {e}")
     
-    def _search_general_web(self, name, affiliation, results):
+    def _search_arxiv(self, name, results):
         """
-        Search for email on general web
+        Search for email on arXiv
+        
+        Args:
+            name (str): Contributor name
+            results (dict): Results dictionary to update
+        """
+        try:
+            # Format search query
+            query = quote_plus(f"au:{name}")
+            url = f"https://export.arxiv.org/api/query?search_query={query}&start=0&max_results=5"
+            
+            response = requests.get(url, headers=self.headers)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, "xml")
+                
+                # Find paper links
+                entries = soup.find_all("entry")
+                
+                for entry in entries:
+                    try:
+                        # Get PDF link
+                        pdf_link = None
+                        links = entry.find_all("link")
+                        for link in links:
+                            if link.get("title") == "pdf":
+                                pdf_link = link.get("href")
+                                break
+                        
+                        if pdf_link:
+                            # Download and process PDF
+                            pdf_path = os.path.join(self.pdf_dir, f"{name.replace(' ', '_')}_{entry.find('id').text.split('/')[-1]}.pdf")
+                            self._download_pdf(pdf_link, pdf_path)
+                            self._extract_emails_from_pdf(pdf_path, results)
+                    
+                    except Exception as e:
+                        print(f"Error processing arXiv entry: {e}")
+        
+        except Exception as e:
+            print(f"Error searching arXiv: {e}")
+    
+    def _search_university_directory(self, name, affiliation, results):
+        """
+        Search for email in university directory
         
         Args:
             name (str): Contributor name
@@ -185,36 +200,12 @@ class EmailSearcher:
         """
         try:
             # Format search query
-            query = f"{name} email"
-            if affiliation:
-                query += f" {affiliation}"
+            query = quote_plus(f"{name} {affiliation} email")
+            url = f"https://www.google.com/search?q={query}"
             
-            # Start browser session
-            self.browser.start_session()
-            
-            # Navigate to Google
-            self.browser.navigate("https://www.google.com/")
-            time.sleep(2)
-            
-            # Get page content
-            content = self.browser.get_page_content()
-            
-            # Find search input and submit search
-            search_input_selector = "textarea[name='q']"
-            self.browser.type(search_input_selector, query)
-            time.sleep(1)
-            
-            # Press Enter to search
-            search_button_selector = "input[name='btnK']"
-            self.browser.click(search_button_selector)
-            time.sleep(3)
-            
-            # Get search results
-            content = self.browser.get_page_content()
-            
-            if content:
-                # Parse content
-                soup = BeautifulSoup(content.get("html", ""), "html.parser")
+            response = requests.get(url, headers=self.headers)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, "html.parser")
                 
                 # Extract text and look for email patterns
                 text = soup.get_text()
@@ -226,7 +217,7 @@ class EmailSearcher:
                         results["sources"].append({
                             "email": email,
                             "source": "Google Search Results",
-                            "url": "https://www.google.com/search?q=" + query.replace(" ", "+")
+                            "url": url
                         })
                 
                 # Find result links
@@ -241,17 +232,13 @@ class EmailSearcher:
                 # Visit up to 3 result links
                 for i, link in enumerate(result_links[:3]):
                     try:
-                        self.browser.navigate(link)
-                        time.sleep(3)
+                        link_response = requests.get(link, headers=self.headers)
                         
-                        # Get page content
-                        page_content = self.browser.get_page_content()
-                        if page_content:
-                            # Parse content
-                            soup = BeautifulSoup(page_content.get("html", ""), "html.parser")
+                        if link_response.status_code == 200:
+                            link_soup = BeautifulSoup(link_response.text, "html.parser")
                             
                             # Extract text and look for email patterns
-                            text = soup.get_text()
+                            text = link_soup.get_text()
                             emails = re.findall(self.email_pattern, text)
                             
                             for email in emails:
@@ -264,17 +251,33 @@ class EmailSearcher:
                                     })
                     except Exception as e:
                         print(f"Error visiting link {link}: {e}")
-            
-            # Close browser session
-            self.browser.close_session()
         
         except Exception as e:
-            print(f"Error searching general web: {e}")
-            # Ensure browser session is closed
-            try:
-                self.browser.close_session()
-            except:
-                pass
+            print(f"Error searching university directory: {e}")
+    
+    def _download_pdf(self, url, save_path):
+        """
+        Download a PDF file from a URL
+        
+        Args:
+            url (str): URL of the PDF file
+            save_path (str): Path to save the PDF file
+            
+        Returns:
+            str: Path to the saved PDF file
+        """
+        try:
+            response = requests.get(url, headers=self.headers, stream=True)
+            response.raise_for_status()
+            
+            with open(save_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            return save_path
+        except Exception as e:
+            print(f"Error downloading PDF from {url}: {e}")
+            return None
     
     def _extract_emails_from_pdf(self, pdf_path, results):
         """
